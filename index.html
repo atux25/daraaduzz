@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Pixel Chase</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #87CEEB 0%, #E0F7FA 100%);
+            font-family: 'Courier New', Courier, monospace;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        #speech-bubble {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -100%) scale(0);
+            background: #ffffff;
+            padding: 20px 30px;
+            border-radius: 30px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            text-align: center;
+            pointer-events: none;
+            transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+            z-index: 100;
+            min-width: 280px;
+            border: 3px solid #000;
+        }
+        #speech-bubble.visible {
+            transform: translate(-50%, -140px) scale(1);
+        }
+        /* Bubble tail */
+        #speech-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 15px 15px 0;
+            border-style: solid;
+            border-color: #000 transparent transparent transparent;
+        }
+        #speech-bubble::before {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-width: 15px 15px 0;
+            border-style: solid;
+            border-color: #ffffff transparent transparent transparent;
+            z-index: 1;
+        }
+        .bubble-text {
+            font-size: 18px;
+            line-height: 1.6;
+            color: #000;
+            font-weight: bold;
+            white-space: pre-wrap;
+        }
+        #hint {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            color: rgba(0,0,0,0.4);
+            pointer-events: none;
+            font-size: 16px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            animation: pulse 1.5s infinite ease-in-out;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="speech-bubble">
+        <div class="bubble-text">ymr hurdn darchvaa mundag baina 😲
+mai eniig iderei 🍬</div>
+    </div>
+    <div id="hint">Catch them if you can!</div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const speechBubble = document.getElementById('speech-bubble');
+    const hint = document.getElementById('hint');
+
+    let width, height;
+    let animationId;
+    let isGameOver = false;
+    let mouseX = -1000;
+    let mouseY = -1000;
+    
+    // Game Constants
+    const PIXEL_SIZE = 4;
+    const FLEE_RADIUS = 150;
+    const MAX_SPEED = 12;
+    const BASE_SPEED = 6;
+    const FRICTION = 0.95;
+    
+    // Character Definitions (Pixel Maps)
+    // 0: transparent, 1: outline/black, 2: white, 3: blue, 4: red, 5: yellow
+    
+    const CHAR_1_MAP = [ // Blue Cat-Robot style
+        [0,0,0,0,3,3,3,3,3,0,0,0,0],
+        [0,0,0,3,3,3,3,3,3,3,0,0,0],
+        [0,0,3,3,3,3,3,3,3,3,3,0,0],
+        [0,0,3,3,2,2,2,2,2,3,3,0,0],
+        [0,0,3,2,2,2,2,2,2,2,3,0,0],
+        [0,0,3,2,2,1,2,1,2,2,3,0,0],
+        [0,0,3,2,2,2,4,2,2,2,3,0,0],
+        [0,0,3,2,2,2,2,2,2,2,3,0,0],
+        [0,0,0,3,2,2,2,2,2,3,0,0,0],
+        [0,0,0,4,4,4,4,4,4,4,0,0,0],
+        [0,0,3,3,3,3,5,3,3,3,3,0,0],
+        [0,3,3,3,3,3,3,3,3,3,3,3,0],
+        [0,3,3,2,2,2,2,2,2,2,3,3,0],
+        [0,3,3,3,3,3,0,3,3,3,3,3,0],
+        [0,0,3,3,3,0,0,0,3,3,3,0,0]
+    ];
+
+    const CHAR_2_MAP = [ // White Beagle style
+        [0,0,0,0,0,0,0,0,0,0,0,0,0],
+        [0,0,0,0,0,2,2,2,2,2,0,0,0],
+        [0,0,0,0,2,2,2,2,2,2,2,0,0],
+        [0,0,0,1,1,2,2,1,2,2,2,0,0],
+        [0,0,0,1,1,1,2,2,2,2,2,2,0],
+        [0,0,0,1,1,1,2,2,2,2,2,2,0],
+        [0,0,0,0,1,4,2,2,2,2,2,0,0],
+        [0,0,0,0,2,2,2,2,2,2,0,0,0],
+        [0,0,2,2,2,2,2,2,2,0,0,0,0],
+        [0,2,2,2,2,2,2,2,2,0,0,0,0],
+        [0,2,2,2,2,2,2,2,2,0,0,0,0],
+        [0,2,2,2,0,0,2,2,2,0,0,0,0],
+        [0,2,2,2,0,0,2,2,2,0,0,0,0]
+    ];
+
+    const CHAR_3_MAP = [ // Yellow Bird style
+        [0,0,0,0,0,5,5,5,0,0,0,0,0],
+        [0,0,0,0,5,5,5,5,5,0,0,0,0],
+        [0,0,0,5,5,5,5,5,5,5,0,0,0],
+        [0,0,0,5,5,1,5,5,5,5,0,0,0],
+        [0,0,5,5,5,5,5,5,5,5,5,0,0],
+        [0,0,5,5,5,5,5,5,5,5,5,0,0],
+        [0,0,0,5,5,5,5,5,5,5,0,0,0],
+        [0,0,0,0,5,5,5,5,5,0,0,0,0],
+        [0,0,0,5,5,0,5,5,0,0,0,0,0],
+        [0,0,5,5,0,0,5,5,0,0,0,0,0]
+    ];
+
+    const COLORS = {
+        0: null,
+        1: '#000000', // Black
+        2: '#FFFFFF', // White
+        3: '#00A0E9', // Blue
+        4: '#E70012', // Red
+        5: '#FFD700'  // Yellow
+    };
+
+    class Character {
+        constructor(map, x, y, speedMult) {
+            this.map = map;
+            this.width = map[0].length * PIXEL_SIZE;
+            this.height = map.length * PIXEL_SIZE;
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() - 0.5) * BASE_SPEED * speedMult;
+            this.vy = (Math.random() - 0.5) * BASE_SPEED * speedMult;
+            this.speedMult = speedMult;
+            this.bounceOffset = 0;
+            this.bounceSpeed = 0.2 + Math.random() * 0.1;
+            this.facingRight = this.vx > 0;
+        }
+
+        update() {
+            if (isGameOver) return;
+
+            // Mouse Avoidance
+            const dx = this.x + this.width/2 - mouseX;
+            const dy = this.y + this.height/2 - mouseY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            if (dist < FLEE_RADIUS) {
+                const angle = Math.atan2(dy, dx);
+                const force = (FLEE_RADIUS - dist) / FLEE_RADIUS;
+                this.vx += Math.cos(angle) * force * 2;
+                this.vy += Math.sin(angle) * force * 2;
+            }
+
+            // Cap speed
+            const currentSpeed = Math.sqrt(this.vx*this.vx + this.vy*this.vy);
+            if (currentSpeed > MAX_SPEED) {
+                this.vx = (this.vx / currentSpeed) * MAX_SPEED;
+                this.vy = (this.vy / currentSpeed) * MAX_SPEED;
+            } else if (currentSpeed < BASE_SPEED * this.speedMult && dist >= FLEE_RADIUS) {
+                // Normalize back to base speed if not fleeing
+                this.vx = (this.vx / currentSpeed) * BASE_SPEED * this.speedMult;
+                this.vy = (this.vy / currentSpeed) * BASE_SPEED * this.speedMult;
+            }
+
+            // Move
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // Bounce off walls
+            if (this.x <= 0) {
+                this.x = 0;
+                this.vx *= -1;
+            }
+            if (this.x + this.width >= width) {
+                this.x = width - this.width;
+                this.vx *= -1;
+            }
+            if (this.y <= 0) {
+                this.y = 0;
+                this.vy *= -1;
+            }
+            if (this.y + this.height >= height) {
+                this.y = height - this.height;
+                this.vy *= -1;
+            }
+
+            // Update facing
+            if (Math.abs(this.vx) > 0.1) {
+                this.facingRight = this.vx > 0;
+            }
+
+            // Bounce animation
+            this.bounceOffset = Math.sin(Date.now() * this.bounceSpeed * 0.05) * 5;
+        }
+
+        draw(ctx) {
+            ctx.save();
+            
+            // Translate to center of character for flip
+            const centerX = this.x + this.width / 2;
+            const centerY = this.y + this.height / 2 + this.bounceOffset;
+            
+            ctx.translate(centerX, centerY);
+            
+            if (!this.facingRight) {
+                ctx.scale(-1, 1);
+            }
+
+            // Draw pixels
+            const offsetX = -this.width / 2;
+            const offsetY = -this.height / 2;
+
+            for (let r = 0; r < this.map.length; r++) {
+                for (let c = 0; c < this.map[r].length; c++) {
+                    const colorCode = this.map[r][c];
+                    if (colorCode !== 0) {
+                        ctx.fillStyle = COLORS[colorCode];
+                        ctx.fillRect(
+                            offsetX + c * PIXEL_SIZE, 
+                            offsetY + r * PIXEL_SIZE, 
+                            PIXEL_SIZE, 
+                            PIXEL_SIZE
+                        );
+                    }
+                }
+            }
+            
+            ctx.restore();
+        }
+
+        checkClick(x, y) {
+            // Simple bounding box check with padding
+            const padding = 20;
+            return (
+                x >= this.x - padding &&
+                x <= this.x + this.width + padding &&
+                y >= this.y - padding &&
+                y <= this.y + this.height + padding
+            );
+        }
+    }
+
+    let characters = [];
+
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // Initialize characters at random positions
+        characters = [
+            new Character(CHAR_1_MAP, Math.random() * (width - 100), Math.random() * (height - 100), 1.0),
+            new Character(CHAR_2_MAP, Math.random() * (width - 100), Math.random() * (height - 100), 1.2),
+            new Character(CHAR_3_MAP, Math.random() * (width - 100), Math.random() * (height - 100), 1.4)
+        ];
+
+        // Input Listeners
+        window.addEventListener('mousemove', e => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+        });
+        
+        window.addEventListener('touchmove', e => {
+            e.preventDefault(); // Prevent scrolling
+            mouseX = e.touches[0].clientX;
+            mouseY = e.touches[0].clientY;
+        }, { passive: false });
+
+        window.addEventListener('mousedown', handleClick);
+        window.addEventListener('touchstart', e => {
+            handleClick({
+                clientX: e.changedTouches[0].clientX,
+                clientY: e.changedTouches[0].clientY
+            });
+        });
+
+        loop();
+    }
+
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+
+    function handleClick(e) {
+        if (isGameOver) return;
+        
+        const clickX = e.clientX;
+        const clickY = e.clientY;
+
+        let caught = false;
+        for (let char of characters) {
+            if (char.checkClick(clickX, clickY)) {
+                caught = true;
+                break;
+            }
+        }
+
+        if (caught) {
+            triggerWin();
+        }
+    }
+
+    function triggerWin() {
+        if (isGameOver) return;
+        isGameOver = true;
+        hint.style.display = 'none';
+        
+        // Stop animation loop logic, start gathering animation
+        const centerX = width / 2;
+        const centerY = height / 2;
+        
+        // Target positions (side by side)
+        const spacing = 80;
+        const targets = [
+            { x: centerX - spacing, y: centerY },
+            { x: centerX, y: centerY },
+            { x: centerX + spacing, y: centerY }
+        ];
+
+        // Animate to center
+        const startTime = Date.now();
+        const startPositions = characters.map(c => ({ x: c.x, y: c.y }));
+        
+        function animateGather() {
+            const now = Date.now();
+            const progress = Math.min((now - startTime) / 600, 1);
+            const ease = 1 - Math.pow(1 - progress, 3); // Cubic ease out
+
+            characters.forEach((char, i) => {
+                char.x = startPositions[i].x + (targets[i].x - char.width/2 - startPositions[i].x) * ease;
+                char.y = startPositions[i].y + (targets[i].y - char.height/2 - startPositions[i].y) * ease;
+                char.vx = 0;
+                char.vy = 0;
+                char.facingRight = true; // All face right or forward
+                char.bounceOffset = 0; // Stop bouncing
+            });
+
+            draw();
+
+            if (progress < 1) {
+                requestAnimationFrame(animateGather);
+            } else {
+                // Animation done, show bubble
+                speechBubble.classList.add('visible');
+            }
+        }
+        
+        animateGather();
+    }
+
+    function loop() {
+        if (!isGameOver) {
+            update();
+            draw();
+            animationId = requestAnimationFrame(loop);
+        }
+    }
+
+    function update() {
+        characters.forEach(char => char.update());
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+        
+        // Draw shadows
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        characters.forEach(char => {
+            const cx = char.x + char.width/2;
+            const cy = char.y + char.height + 10;
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, char.width/1.5, char.width/4, 0, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        characters.forEach(char => char.draw(ctx));
+    }
+
+    init();
+
+</script>
+</body>
+</html>
